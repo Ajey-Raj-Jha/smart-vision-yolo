@@ -1,0 +1,28 @@
+# Virtual environment
+venv/
+
+# YOLO training outputs (huge)
+runs/
+
+# YOLO cache
+yolo/labels.cache
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Streamlit
+.streamlit/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Weights (keep only best.pt if needed later)
+*.pt
+
+# Dataset (do not push raw data)
+yolo/images/
+yolo/labels/
+yolo/labels.cache
+yolo/labels/bg_unused.cache
