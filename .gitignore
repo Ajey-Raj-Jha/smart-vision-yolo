@@ -26,3 +26,14 @@ yolo/images/
 yolo/labels/
 yolo/labels.cache
 yolo/labels/bg_unused.cache
+
+# Virtual environments
+venv/
+
+# Model weights
+*.pth
+*.pt
+
+# Datasets
+yolo/images/
+classification_data/
