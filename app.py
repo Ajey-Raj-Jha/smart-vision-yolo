@@ -4,40 +4,42 @@ from PIL import Image
 import torch
 import torch.nn as nn
 from torchvision import models, transforms
-import numpy as np
+import pandas as pd
 
-
-# ---------------- Page Config ----------------
+# ---------------------------------------------------
+# PAGE CONFIG
+# ---------------------------------------------------
 st.set_page_config(
     page_title="SmartVision AI",
     page_icon="👁️",
     layout="wide"
 )
 
-st.markdown(
-    """
-    <h1 style="text-align:center;">SmartVision AI</h1>
-    <p style="text-align:center; color:gray;">
-    End-to-End Object Detection Pipeline using YOLOv8
-    </p>
-    <hr>
-    """,
-    unsafe_allow_html=True
-)
+st.title("SmartVision AI")
+st.caption("End-to-End Object Detection → Classification Pipeline")
 
-# ---------------- Load YOLO Model ----------------
+# ---------------------------------------------------
+# DEVICE
+# ---------------------------------------------------
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# ---------------------------------------------------
+# LOAD YOLO MODEL
+# ---------------------------------------------------
 @st.cache_resource
-def load_model():
+def load_yolo():
     return YOLO("best.pt")
 
-model = load_model()
-# ---------------- Load EfficientNetB0 Classifier ----------------
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+yolo_model = load_yolo()
+
+# ---------------------------------------------------
+# LOAD CLASSIFIER (EfficientNet-B0)
+# ---------------------------------------------------
 NUM_CLASSES = 25
 
 @st.cache_resource
 def load_classifier():
-    model = models.efficientnet_b0(pretrained=False)
+    model = models.efficientnet_b0(weights=None)
     model.classifier[1] = nn.Linear(
         model.classifier[1].in_features,
         NUM_CLASSES
@@ -51,43 +53,29 @@ def load_classifier():
 
 classifier = load_classifier()
 
-# ---------------- Sidebar ----------------
-st.sidebar.header("⚙️ Settings")
+# ---------------------------------------------------
+# CLASSIFIER TRANSFORM
+# ---------------------------------------------------
+classifier_transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485, 0.456, 0.406],
+                         [0.229, 0.224, 0.225])
+])
+
+# ---------------------------------------------------
+# SIDEBAR
+# ---------------------------------------------------
+st.sidebar.header("⚙️ Detection Settings")
 
 conf_threshold = st.sidebar.slider(
-    "Confidence Threshold",
-    min_value=0.1,
-    max_value=0.9,
-    value=0.25,
-    step=0.05
+    "YOLO Confidence Threshold",
+    0.1, 0.9, 0.25, 0.05
 )
 
-st.sidebar.markdown(
-    """
-    **Model:** YOLOv8  
-    **Dataset:** COCO 25-class subset  
-    **Pipeline:** Detection → Crop → (Classification)
-    """
-)
-
-# ---------------- Helper: Crop detections ----------------
-def crop_detections(image, result):
-    crops = []
-    boxes = result.boxes
-
-    for box, cls, conf in zip(boxes.xyxy, boxes.cls, boxes.conf):
-        x1, y1, x2, y2 = map(int, box)
-        crop = image.crop((x1, y1, x2, y2))
-
-        crops.append({
-            "image": crop,
-            "yolo_class": int(cls),
-            "confidence": float(conf)
-        })
-
-    return crops
-
-# ---------------- Main UI ----------------
+# ---------------------------------------------------
+# IMAGE UPLOAD
+# ---------------------------------------------------
 uploaded_file = st.file_uploader(
     "Upload an image",
     type=["jpg", "jpeg", "png"]
@@ -98,58 +86,82 @@ if uploaded_file:
 
     col1, col2 = st.columns(2)
 
-    # ---------- Original Image ----------
     with col1:
-        st.subheader("📷 Original Image")
+        st.subheader("Original Image")
         st.image(image, use_container_width=True)
 
-    # ---------- YOLO Detection ----------
     with col2:
-        st.subheader("🔍 YOLO Detection")
+        st.subheader("YOLOv8 Detection")
 
-        with st.spinner("Running YOLOv8 inference..."):
-            results = model.predict(image, conf=conf_threshold)
-            result_img = results[0].plot()
+        results = yolo_model.predict(image, conf=conf_threshold)
+        result = results[0]
 
-        st.image(result_img, use_container_width=True)
+        plotted = result.plot()
+        st.image(plotted, use_container_width=True)
 
-# ---------------- Model Comparison Section ----------------
+    # ---------------- CLASSIFICATION ----------------
+    st.subheader("Detected Object Classification")
+
+    if result.boxes is None or len(result.boxes) == 0:
+        st.info("No objects detected.")
+    else:
+        boxes = result.boxes.xyxy.cpu().numpy()
+
+        for box in boxes:
+            x1, y1, x2, y2 = map(int, box[:4])
+            crop = image.crop((x1, y1, x2, y2))
+
+            input_tensor = classifier_transform(crop).unsqueeze(0).to(DEVICE)
+
+            with torch.no_grad():
+                outputs = classifier(input_tensor)
+                probs = torch.softmax(outputs, dim=1)
+                pred_class = torch.argmax(probs, dim=1).item() + 1  # start from 1
+                confidence = probs[0][pred_class - 1].item()
+
+            st.image(
+                crop,
+                caption=f"Predicted Class: {pred_class} | Confidence: {confidence:.2f}",
+                width=200
+            )
+
+# ---------------------------------------------------
+# MODEL PERFORMANCE TABLE (CLASSIFICATION ONLY)
+# ---------------------------------------------------
 st.markdown("---")
-st.subheader("📊 Model Comparison & Selection")
+st.subheader("📊 Classification Model Performance")
 
 comparison_data = {
-    "Model": ["VGG16", "ResNet50", "MobileNetV2", "EfficientNetB0"],
-    "Parameters (M)": [134.36, 23.56, 2.26, 4.04],
-    "Model Size (MB)": [512.57, 90.18, 8.84, 15.70],
-    "Inference Time (ms)": [21.53, 9.04, 5.90, 11.46]
+    "Model": [
+        "VGG16",
+        "ResNet50",
+        "MobileNetV2",
+        "EfficientNet-B0"
+    ],
+    "Validation Accuracy (%)": [
+        "82.3",
+        "89.2",
+        "63.2",
+        "64.7"
+    ]
 }
 
-st.table(comparison_data)
+df = pd.DataFrame(comparison_data)
+st.dataframe(df, use_container_width=True)
 
-st.markdown(
-    """
-**Analysis & Final Selection**
+# ---------------------------------------------------
+# YOLO METRIC (SEPARATE LINE)
+# ---------------------------------------------------
+st.markdown("""
+**Detection Model (YOLOv8):**  
+Evaluated using **mAP@50 (Mean Average Precision at IoU = 0.50)** → **0.129**
 
-VGG16, while simple and effective, suffers from an extremely large parameter count and
-high memory usage, making it unsuitable for deployment-focused applications.
-MobileNetV2 achieves the fastest inference speed and smallest footprint, making it ideal
-for edge and mobile environments, though with a slight accuracy trade-off.
-ResNet50 provides a strong balance between accuracy and efficiency.
-EfficientNetB0 delivers the best overall trade-off by combining high accuracy with a
-compact model size and reasonable inference latency.
+Unlike classification models that use accuracy, object detection models are
+evaluated using localization-based metrics such as mAP.
+""")
 
-**EfficientNetB0 was therefore selected as the final classification model and integrated
-with the YOLOv8 detection pipeline.**
-"""
-)
-
-# ---------------- Footer ----------------
-st.markdown(
-    """
-    <hr>
-    <p style="text-align:center; color:gray;">
-    SmartVision AI • Phase 4.1 Pipeline Complete
-    </p>
-    """,
-    unsafe_allow_html=True
-)
+# ---------------------------------------------------
+# FOOTER
+# ---------------------------------------------------
+st.markdown("---")
+st.caption("SmartVision AI • End-to-End Computer Vision System")
